@@ -1,0 +1,181 @@
+version: '2'
+services:
+  elemento-auth-client:
+    image: ghcr.io/elemento-modular-cloud/elemento-auth-client
+    environment:
+      - LOG_LEVEL=debug
+      - NETWORK_HOST=0.0.0.0 
+    volumes:
+      - $PWD/elemento-uuids/:/opt/elemento/elemento-uuids/
+    ports:
+      - 47777:47777
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:47777"]
+      interval: 1s
+      timeout: 2s
+      retries: 3
+      start_period: 0s
+    restart: unless-stopped
+
+  elemento-matcher-client:
+    image: ghcr.io/elemento-modular-cloud/elemento-matcher-client
+    environment:
+      - LOG_LEVEL=debug
+      - NETWORK_HOST=0.0.0.0 
+      - STORAGE_CLIENT_HOST=elemento-storage-client
+      - GUACAMOLE_HOST=https://nginx_guacamole_compose:443
+    volumes:
+      - $PWD/elemento-uuids/:/opt/elemento/elemento-uuids/
+      - $PWD/elemento-matcher-client/vm-templates/:/opt/elemento/elemento-matcher-client/vm-templates/:rw
+      - $PWD/hosts:/opt/elemento/hosts:ro
+    links:
+      - nginx
+    depends_on:
+      elemento-auth-client:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+      guacamole:
+        condition: service_healthy
+    ports:
+      - 17777:17777
+      - 7701:7701
+      - 7771:7771
+    restart: unless-stopped
+
+  elemento-storage-client:
+    image: ghcr.io/elemento-modular-cloud/elemento-storage-client
+    environment:
+      - LOG_LEVEL=debug
+      - NETWORK_HOST=0.0.0.0 
+    volumes:
+      - $PWD/elemento-uuids/:/opt/elemento/elemento-uuids/
+      - $PWD/hosts:/opt/elemento/hosts:ro
+    depends_on:
+      elemento-auth-client:
+        condition: service_healthy
+    ports:
+      - 27777:27777
+      - 7775:7775
+    restart: unless-stopped
+
+  elemento-network-client:
+    image: ghcr.io/elemento-modular-cloud/elemento-network-client
+    environment:
+      - LOG_LEVEL=debug
+      - NETWORK_HOST=0.0.0.0 
+    volumes:
+      - $PWD/elemento-uuids/:/opt/elemento/elemento-uuids/
+      - $PWD/hosts:/opt/elemento/hosts:ro
+    depends_on:
+      elemento-auth-client:
+        condition: service_healthy
+    ports:
+      - 37777:37777
+    restart: unless-stopped
+
+  guacd:
+    container_name: guacd_compose
+    image: guacamole/guacd
+    restart: always
+    volumes:
+    - $PWD/elemento-apache-guacamole/drive:/drive:rw
+    - $PWD/elemento-apache-guacamole/record:/record:rw
+
+  # postgres
+  postgres:
+    container_name: postgres_guacamole_compose
+    environment:
+      PGDATA: /var/lib/postgresql/data/guacamole
+      POSTGRES_DB: guacamole_db
+      POSTGRES_PASSWORD: 'ElementoIsSuperSafeOnlocalhost'
+      POSTGRES_USER: guacamole_user
+    image: postgres:13.4
+    restart: always
+    volumes:
+    - $PWD/elemento-apache-guacamole/init:/docker-entrypoint-initdb.d:ro
+    - $PWD/elemento-apache-guacamole/data:/var/lib/postgresql/data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-U", "guacamole_user", "-d", "guacamole_db"]
+      interval: 30s
+      timeout: 60s
+      retries: 10
+      start_period: 80s 
+
+  # guacamole 
+  guacamole:
+    container_name: guacamole_compose
+    depends_on:
+      guacd:
+        condition: service_started
+      postgres:
+        condition: service_started
+      guacamole_start:
+        condition: service_completed_successfully
+    environment:
+#     TOTP_ENABLED: 'true'
+#.....TOTP_ISSUER: 'Apache Guacamole'
+#.....TOTP_DIGITS: 6
+#.....TOTP_PERIOD: 30
+##TOTP_MODE: sha1
+      GUACD_HOSTNAME: guacd
+      POSTGRES_DATABASE: guacamole_db
+      POSTGRES_HOSTNAME: postgres
+      POSTGRES_PASSWORD: 'ElementoIsSuperSafeOnlocalhost'
+      POSTGRES_USER: guacamole_user
+      # set custom GUACAMOLE_HOME within container
+      GUACAMOLE_HOME: /guachome
+    volumes:
+    - $PWD/elemento-apache-guacamole/guachome:/guachome
+    - $PWD/elemento-apache-guacamole/extensions:/guachome/extensions
+    image: guacamole/guacamole
+#or 'guacamole/guacamole:lastest'
+    links:
+    - guacd
+    ports:
+## enable next line if you are not going to use nginx
+##    - 8080:8080/tcp # Guacamole is on :8080/guacamole, not /.
+## enable next line when using nginx
+    - 8080/tcp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/guacamole"]
+      interval: 5s
+      timeout: 5s
+      retries: 25
+      start_period: 30s
+    restart: always
+
+########### optional ##############
+  # nginx
+  nginx:
+   container_name: nginx_guacamole_compose
+   restart: always
+   image: nginx
+   depends_on:
+    guacd:
+      condition: service_started
+    guacamole:
+      condition: service_started
+    guacamole_start:
+      condition: service_completed_successfully
+   volumes:
+   - $PWD/elemento-apache-guacamole/nginx/ssl/self.cert:/etc/nginx/ssl/self.cert:ro
+   - $PWD/elemento-apache-guacamole/nginx/ssl/self-ssl.key:/etc/nginx/ssl/self-ssl.key:ro
+   - $PWD/elemento-apache-guacamole/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+   - $PWD/elemento-apache-guacamole/nginx/mysite.template:/etc/nginx/conf.d/default.conf:ro
+   - $PWD/elemento-apache-guacamole/nginx/images:/usr/share/nginx/images:ro
+   ports:
+   - 8443:443
+   expose:
+   - 443
+   links:
+   - guacamole
+   # run nginx
+   command: /bin/bash -c "nginx -g 'daemon off;'"
+
+  guacamole_start:
+    image: alpine
+    volumes:
+      - $PWD/elemento-apache-guacamole:/home
+    working_dir: /home
+    entrypoint: /bin/sh -c "apk add --no-cache openssl sudo && rm -rf ./data/ ./drive/ ./record/ && /bin/sh /home/avvio.sh"
