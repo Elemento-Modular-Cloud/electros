@@ -33,10 +33,6 @@ services:
     depends_on:
       elemento-auth-client:
         condition: service_healthy
-      nginx:
-        condition: service_started
-      guacamole:
-        condition: service_healthy
     ports:
       - 17777:17777
       - 7701:7701
