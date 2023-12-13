@@ -28,8 +28,6 @@ services:
       - $PWD/elemento-uuids/:/root/.elemento/elemento-uuids/
       - $PWD/elemento-matcher-client/vm-templates/:/opt/elemento/elemento-matcher-client/vm-templates/:rw
       - $PWD/hosts:/root/.elemento/hosts:ro
-    links:
-      - nginx
     depends_on:
       elemento-auth-client:
         condition: service_healthy
